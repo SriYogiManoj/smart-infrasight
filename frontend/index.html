@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Smart InfraSight Demo</title>
+
+  <!-- MapLibre -->
+  <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet"/>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      display: flex;
+      height: 100vh;
+    }
+
+    /* LEFT PANEL */
+    #sidebar {
+      width: 22%;
+      background: #0f172a;
+      color: #ffffff;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+
+    #sidebar h1 {
+      font-size: 22px;
+      margin-bottom: 6px;
+    }
+
+    #sidebar p {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #cbd5e1;
+      margin-bottom: 16px;
+    }
+
+    .kpi {
+      background: #1e293b;
+      padding: 10px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+
+    .kpi span {
+      float: right;
+      font-weight: bold;
+    }
+
+    .filter {
+      margin-top: 20px;
+    }
+
+    select {
+      width: 100%;
+      padding: 6px;
+      margin-top: 6px;
+    }
+
+    /* MAP */
+    #map {
+      width: 78%;
+      height: 100vh;
+    }
+
+    /* LEGEND */
+    .legend {
+      position: absolute;
+      bottom: 30px;
+      left: 26%;
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.3);
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .color-box {
+      width: 14px;
+      height: 14px;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- LEFT SIDEBAR -->
+<div id="sidebar">
+  <h1>Smart InfraSight</h1>
+  <p>
+    Unified spatial intelligence platform for proactive risk management across
+    utility and telecom infrastructure networks.
+  </p>
+
+  <div class="kpi">Total Assets <span id="kpi-total">0</span></div>
+  <div class="kpi">High Risk <span id="kpi-high">0</span></div>
+  <div class="kpi">Medium Risk <span id="kpi-medium">0</span></div>
+  <div class="kpi">Low Risk <span id="kpi-low">0</span></div>
+
+  <div class="filter">
+    <b>Domain Filter</b>
+    <select id="domainFilter">
+      <option value="ALL">All</option>
+      <option value="Utility">Utility</option>
+      <option value="Telecom">Telecom</option>
+    </select>
+  </div>
+</div>
+
+<!-- MAP -->
+<div id="map"></div>
+
+<!-- LEGEND -->
+<div class="legend">
+  <b>Risk Level</b><br/>
+  <div class="legend-item">
+    <div class="color-box" style="background:red"></div> High Risk
+  </div>
+  <div class="legend-item">
+    <div class="color-box" style="background:orange"></div> Medium Risk
+  </div>
+  <div class="legend-item">
+    <div class="color-box" style="background:green"></div> Low Risk
+  </div>
+</div>
+
+<script>
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json',
+    center: [-76.61, 39.29],
+    zoom: 11
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  let markers = [];
+  let dynamicIds = [];
+
+  function clearMap() {
+    markers.forEach(m => m.remove());
+    markers = [];
+
+    dynamicIds.forEach(id => {
+      if (map.getLayer(id)) map.removeLayer(id);
+      if (map.getSource(id)) map.removeSource(id);
+    });
+    dynamicIds = [];
+  }
+
+  function loadAssets(domain = "ALL") {
+
+    clearMap();
+
+    fetch('http://127.0.0.1:8000/assets-risk')
+      .then(res => res.json())
+      .then(data => {
+
+        let total = 0, high = 0, medium = 0, low = 0;
+
+        data.forEach(asset => {
+
+          if (domain !== "ALL" && asset.domain !== domain) return;
+          total++;
+
+          const risk =
+            asset.flood_score +
+            asset.cyclone_score +
+            asset.vegetation_score +
+            asset.age_score +
+            asset.inspection_score;
+
+          if (risk >= 60) high++;
+          else if (risk >= 40) medium++;
+          else low++;
+
+          const color =
+            risk >= 60 ? 'red' :
+            risk >= 40 ? 'orange' :
+            'green';
+
+          if (!asset.geometry) return;
+
+          const geom = typeof asset.geometry === 'string'
+            ? JSON.parse(asset.geometry)
+            : asset.geometry;
+
+          if (geom.type === 'Point') {
+
+            const marker = new maplibregl.Marker({ color })
+              .setLngLat(geom.coordinates)
+              .setPopup(new maplibregl.Popup().setHTML(
+                `<b>${asset.name}</b><br/>
+                 ${asset.asset_type}<br/>
+                 Risk Score: ${risk}`
+              ))
+              .addTo(map);
+
+            markers.push(marker);
+
+          } else {
+
+            const src = `src-${asset.id}`;
+            const layer = `layer-${asset.id}`;
+
+            map.addSource(src, {
+              type: 'geojson',
+              data: { type: 'Feature', geometry: geom }
+            });
+
+            map.addLayer({
+              id: layer,
+              type: geom.type === 'LineString' ? 'line' : 'fill',
+              source: src,
+              paint: geom.type === 'LineString'
+                ? { 'line-color': color, 'line-width': 3 }
+                : { 'fill-color': color, 'fill-opacity': 0.5 }
+            });
+
+            map.on('click', layer, (e) => {
+              new maplibregl.Popup()
+                .setLngLat(e.lngLat)
+                .setHTML(`<b>${asset.name}</b><br/>Risk Score: ${risk}`)
+                .addTo(map);
+            });
+
+            dynamicIds.push(layer, src);
+          }
+        });
+
+        // Update KPIs
+        document.getElementById('kpi-total').innerText = total;
+        document.getElementById('kpi-high').innerText = high;
+        document.getElementById('kpi-medium').innerText = medium;
+        document.getElementById('kpi-low').innerText = low;
+      });
+  }
+
+  map.on('load', () => loadAssets());
+
+  document.getElementById('domainFilter').addEventListener('change', e => {
+    loadAssets(e.target.value);
+  });
+
+</script>
+
+</body>
+</html>

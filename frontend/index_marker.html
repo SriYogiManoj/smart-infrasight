@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Marker Test</title>
+  <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet"/>
+  <style>
+    body { margin:0 }
+    #map { width:100vw; height:100vh }
+  </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<script>
+alert("JS loaded");
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json',
+  center: [83.32, 17.73],
+  zoom: 12
+});
+
+map.on('load', () => {
+
+  // HARD TEST MARKER
+  new maplibregl.Marker({ color: 'blue' })
+    .setLngLat([83.32, 17.73])
+    .addTo(map);
+
+  // API MARKERS
+  fetch('http://127.0.0.1:8000/assets-risk')
+    .then(r => r.json())
+    .then(data => {
+
+      console.log("API DATA COUNT:", data.length);
+
+      data.forEach(a => {
+        const coords = JSON.parse(a.geometry).coordinates;
+
+        new maplibregl.Marker({ color: 'red' })
+          .setLngLat(coords)
+          .addTo(map);
+      });
+    });
+});
+</script>
+</body>
+</html>

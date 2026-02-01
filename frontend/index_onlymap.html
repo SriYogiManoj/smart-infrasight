@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Smart InfraSight Demo</title>
+
+  <!-- MapLibre library -->
+  <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet"/>
+
+  <style>
+    body { margin: 0; padding: 0; font-family: Arial; }
+    #map { width: 100vw; height: 100vh; }
+
+    .legend {
+      position: absolute;
+      bottom: 30px;
+      left: 20px;
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.3);
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .color-box {
+      width: 14px;
+      height: 14px;
+      margin-right: 6px;
+    }
+
+    .filter {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<div class="filter">
+  <b>Asset Filter</b><br/>
+  <select id="domainFilter">
+    <option value="ALL">All</option>
+    <option value="Utility">Utility</option>
+    <option value="Telecom">Telecom</option>
+  </select>
+</div>
+
+<div class="legend">
+  <b>Risk Level</b><br/>
+  <div class="legend-item">
+    <div class="color-box" style="background:red"></div> High Risk
+  </div>
+  <div class="legend-item">
+    <div class="color-box" style="background:orange"></div> Medium Risk
+  </div>
+  <div class="legend-item">
+    <div class="color-box" style="background:green"></div> Low Risk
+  </div>
+</div>
+
+<script>
+
+  /* =========================
+     A. CREATE MAP
+  ========================= */
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://demotiles.maplibre.org/style.json',
+    center: [-76.61, 39.29],
+    zoom: 11
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  let markers = [];
+  let dynamicLayerIds = [];
+
+  /* =========================
+     B. LOAD & DRAW ASSETS
+  ========================= */
+
+  function clearMap() {
+    markers.forEach(m => m.remove());
+    markers = [];
+
+    dynamicLayerIds.forEach(id => {
+      if (map.getLayer(id)) map.removeLayer(id);
+      if (map.getSource(id)) map.removeSource(id);
+    });
+    dynamicLayerIds = [];
+  }
+
+  function loadAssets(domain = "ALL") {
+
+    clearMap();
+
+    fetch('http://127.0.0.1:8000/assets-risk')
+      .then(res => res.json())
+      .then(data => {
+
+        data.forEach(asset => {
+
+          if (domain !== "ALL" && asset.domain !== domain) return;
+
+          const risk =
+            asset.flood_score +
+            asset.cyclone_score +
+            asset.vegetation_score +
+            asset.age_score +
+            asset.inspection_score;
+
+          const color =
+            risk >= 60 ? 'red' :
+            risk >= 40 ? 'orange' :
+            'green';
+
+          if (!asset.geometry) return;
+
+          const geom = typeof asset.geometry === 'string'
+            ? JSON.parse(asset.geometry)
+            : asset.geometry;
+
+          /* -------------------------
+             POINT ASSETS
+          ------------------------- */
+          if (geom.type === 'Point') {
+
+            const marker = new maplibregl.Marker({ color })
+              .setLngLat(geom.coordinates)
+              .setPopup(new maplibregl.Popup().setHTML(
+                `<b>${asset.name}</b><br/>
+                 Domain: ${asset.domain}<br/>
+                 Type: ${asset.asset_type}<br/>
+                 Risk: ${risk}`
+              ))
+              .addTo(map);
+
+            markers.push(marker);
+          }
+
+          /* -------------------------
+             LINE & POLYGON ASSETS
+          ------------------------- */
+          else {
+
+            const sourceId = `src-${asset.id}`;
+            const layerId  = `layer-${asset.id}`;
+
+            map.addSource(sourceId, {
+              type: 'geojson',
+              data: {
+                type: 'Feature',
+                geometry: geom
+              }
+            });
+
+            map.addLayer({
+              id: layerId,
+              type: geom.type === 'LineString' ? 'line' : 'fill',
+              source: sourceId,
+              paint: geom.type === 'LineString'
+                ? {
+                    'line-color': color,
+                    'line-width': 4
+                  }
+                : {
+                    'fill-color': color,
+                    'fill-opacity': 0.5
+                  }
+            });
+            /* 🔥 ADD CLICK HANDLER FOR LINE / POLYGON */
+            map.on('click', layerId, (e) => {
+
+              const popupHtml = `
+                <b>${asset.name}</b><br/>
+                Domain: ${asset.domain}<br/>
+                Type: ${asset.asset_type}<br/>
+                <hr/>
+                Flood: ${asset.flood_score}<br/>
+                Cyclone: ${asset.cyclone_score}<br/>
+                Vegetation: ${asset.vegetation_score}<br/>
+                Age: ${asset.age_score}<br/>
+                Inspection: ${asset.inspection_score}<br/>
+                <b>Total Risk: ${risk}</b>
+              `;
+
+              new maplibregl.Popup()
+                .setLngLat(e.lngLat)
+                .setHTML(popupHtml)
+                .addTo(map);
+            });
+
+            /* Change cursor to pointer */
+            map.on('mouseenter', layerId, () => {
+              map.getCanvas().style.cursor = 'pointer';
+            });
+
+            map.on('mouseleave', layerId, () => {
+              map.getCanvas().style.cursor = '';
+            });
+
+            dynamicLayerIds.push(layerId, sourceId);
+          }
+        });
+      });
+  }
+
+  /* =========================
+     C. EVENTS
+  ========================= */
+
+  map.on('load', () => loadAssets());
+
+  document.getElementById('domainFilter').addEventListener('change', e => {
+    loadAssets(e.target.value);
+  });
+
+</script>
+
+</body>
+</html>
